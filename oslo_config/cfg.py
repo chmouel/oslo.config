@@ -328,6 +328,7 @@ import os
 import string
 import sys
 
+import etcd
 import six
 from six import moves
 
@@ -1225,6 +1226,26 @@ class _ConfigFileOpt(Opt):
         return kwargs
 
 
+
+class _ConfigEtcdOpt(Opt):
+    class ConfigEtcdAction(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            if getattr(namespace, self.dest, None) is None:
+                setattr(namespace, self.dest, [])
+            items = getattr(namespace, self.dest)
+            items.append(values)
+
+            ConfigEtcd._get_config(values, namespace)
+
+    def __init__(self, name, **kwargs):
+        super(_ConfigEtcdOpt, self).__init__(name, lambda x: x, **kwargs)
+
+    def _get_argparse_kwargs(self, group, **kwargs):
+        """Extends the base argparse keyword dict for the config file opt."""
+        kwargs = super(_ConfigEtcdOpt, self)._get_argparse_kwargs(group)
+        kwargs['action'] = self.ConfigEtcdAction
+        return kwargs
+
 class _ConfigDirOpt(Opt):
 
     """The --config-dir option.
@@ -1427,6 +1448,26 @@ class ConfigParser(iniparser.BaseParser):
             raise
 
         namespace._add_parsed_config_file(sections, normalized)
+
+
+class ConfigEtcd(object):
+    @classmethod
+    def _get_config(cls, values, namespace):
+        ret = {}
+        base_key = "/org/chmouel"
+        client = etcd.client.Client(values)
+        try:
+            tree = client.read(base_key)
+            for x in tree.children:
+                _b = os.path.basename(x.key)
+                ret[_b] = dict()
+                _vv = client.read(x.key)
+                for l in _vv.leaves:
+                    ret[_b][os.path.basename(l.key)] = [l.value]
+        except(KeyError):
+            pass
+
+        namespace._add_parsed_config_file(ret, ret)
 
 
 class MultiConfigParser(object):
@@ -1761,6 +1802,9 @@ class ConfigOpts(collections.Mapping):
         """Initialize a ConfigOpts object for option parsing."""
 
         self._config_opts = [
+            _ConfigEtcdOpt('etcd-server',
+                           default=None,
+                           metavar='ETCD_SERVER'),
             _ConfigFileOpt('config-file',
                            default=default_config_files,
                            metavar='PATH',
